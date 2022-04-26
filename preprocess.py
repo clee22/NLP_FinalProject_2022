@@ -1,5 +1,10 @@
-# for preprocessor function and dataset processing
+import pandas as pd
+import datasets 
+from datasets import concatenate_datasets
 
+# source_tokenizer.save_pretrained(os.path.join(args.save_dir, f"{args.target_lang}_tokenizer"))
+
+# for preprocessor function and dataset processing
 def set_up_datasets(tokenizer, seq_len = 128):
   en_hu_dataset = load_dataset("tatoeba", lang1="en", lang2="hu") 
   de_hu_dataset = load_dataset("tatoeba", lang1="de", lang2="hu")
@@ -38,7 +43,6 @@ def set_up_datasets(tokenizer, seq_len = 128):
     encoded_dataset = dataset.map(preprocess_function, fn_kwargs = dict(seq_len = seq_len), remove_columns = old_col_names, num_proc = 4)
     encoded_datasets.append(encoded_dataset)
   # now list the train splits and the test splits, and concatenate them
-  from datasets import concatenate_datasets
   train_splits = []
   test_splits = []
   for dataset in encoded_datasets:
