@@ -1,3 +1,5 @@
+# i intend this file to load everything (e.g. tokenizer, model, datasets, etc) and then save them locally
+
 import pandas as pd
 import datasets 
 from datasets import load_dataset, concatenate_datasets
