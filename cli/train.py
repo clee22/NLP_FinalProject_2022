@@ -6,6 +6,7 @@ from packaging import version
 import pandas as pd
 from datasets import load_dataset, concatenate_datasets
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
+from transformers.data.data_collator import DataCollatorWithPadding
 
 # Setup logging
 logger = logging.getLogger(__file__)
@@ -14,6 +15,11 @@ logging.basicConfig(
     datefmt="%m/%d/%Y %H:%M:%S",
     level=logging.INFO,
 )
+
+datasets.utils.logging.set_verbosity_warning()
+transformers.utils.logging.set_verbosity_warning()
+# metric
+bleu = datasets.load_metric("sacrebleu")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Every Param for training")
@@ -59,13 +65,13 @@ def parse_args():
     parser.add_argument(
         "--max_train_steps",
         type=int,
-        default=64,
+        default=35000,
         help=("How how many steps will you train for"),
     )
     parser.add_argument(
         "--eval_every",
         type=int,
-        default=None,
+        default=15000,
         help=("when will you evaluate your training"),
     )
     parser.add_argument(
@@ -74,5 +80,34 @@ def parse_args():
         default=None,
         help=("when will you evaluate your training"),
     )
+    parser.add_argument(
+        "--custom",
+        type=bool,
+        default=False,
+        help=("Am I training the custom or default model?"),
+    )
     args = parser.parse_args()
     return args
+
+
+def main():
+    args = parse_args()
+    logger.info(f"Starting script with arguments: {args}")
+    if args.custom is False:
+        model = AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model.pt")
+    else:
+        pre_trained =  AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_pretrained_model.pt")
+    
+                                                             
+        
+        
+
+    # Initialize wandb as soon as possible to log all stdout to the cloud
+    wandb.init(project=args.wandb_project, config=args)
+    
+    
+
+if __name__ == "__main__" :
+    if version.parse(datasets.__version__) < version.parse("1.18.0"):
+        raise RuntimeError("This script requires Datasets 1.18.0 or higher. Please update via pip install -U datasets.")
+    main()
