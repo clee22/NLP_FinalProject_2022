@@ -3,12 +3,20 @@ import argparse
 import logging
 from packaging import version
 
+from tqdm.auto import tqdm
+import math
+import wandb
+import torch
+import datasets
 import pandas as pd
-from datasets import load_dataset, concatenate_datasets
+import torch.nn.functional as F
+from datasets import load_dataset, concatenate_datasets, load_metric
+import transformers
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
 from transformers.data.data_collator import DataCollatorWithPadding
-import custom_mt.custom_mt.py
+from custom_mt import custom_mt5 
 
+"""
 # Setup logging
 logger = logging.getLogger(__file__)
 logging.basicConfig(
@@ -16,11 +24,12 @@ logging.basicConfig(
     datefmt="%m/%d/%Y %H:%M:%S",
     level=logging.INFO,
 )
+"""
 
-datasets.utils.logging.set_verbosity_warning()
-transformers.utils.logging.set_verbosity_warning()
+#datasets.utils.logging.set_verbosity_warning()
+#transformers.utils.logging.set_verbosity_warning()
 # metric
-bleu = datasets.load_metric("sacrebleu")
+bleu = load_metric("sacrebleu")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Every Param for training")
@@ -92,25 +101,30 @@ def parse_args():
 
 def main():
     args = parse_args()
-    logger.info(f"Starting script with arguments: {args}")
+    # define device
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    # logger.info(f"Starting script with arguments: {args}")
     if args.custom is False:
-        model = AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model.pt")
+        model = AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model"))
     else:
-        pre_trained =  AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_pretrained_model.pt")
+        pre_trained =  AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_pretrained_model"))
         model = custom_mt5(mt5_model = pretrained_model)
     
-    # Datasets loaded from local files                                                         
-    train_dataset.load_to_disk(os.path.join(args.save_dir, f"train_dataset")
-    eval_dataset.load_to_disk(os.path.join(args.save_dir, f"test_dataset")
+    model = model.to(device)
+    # load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_tokenizer"))
+  # Datasets loaded from local files
+    train_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"train_dataset"))
+    eval_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"test_dataset"))
     # Dataloader
     collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors = "pt")
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=batch_size)
-    valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=batch_size)    
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=args.batch_size)
+    valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=args.batch_size)    
     # optimizer
     optimizer = torch.optim.AdamW(
-        custom_model.parameters(),
-        lr=lr,
-        weight_decay=weight_decay,
+        model.parameters(),
+        lr=args.lr,
+        weight_decay=args.weight_decay,
     )
     # getting the max_train_steps and epoch count settled
     num_update_steps_per_epoch = len(train_dataloader)
@@ -120,36 +134,40 @@ def main():
         args.num_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
     # scheduler
     lr_scheduler = transformers.get_scheduler(
-        name=linear,
+        name="linear",
         optimizer=optimizer,
-        num_warmup_steps=args.num_warmup_steps,
+        num_warmup_steps=args.warmup_steps,
         num_training_steps=args.max_train_steps,
     )
     # Initialize wandb as soon as possible to log all stdout to the cloud
-    wandb.init(project=args.checkpoint_name, config=args)
+    run = wandb.init(project="Final ProjectSpring2022", config=args)
     
-    logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
-    logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Total optimization steps = {args.max_train_steps}")
-    progress_bar = tqdm(range(args.max_train_steps))
-                              
+    #logger.info("***** Running training *****")
+    #logger.info(f"  Num examples = {len(train_dataset)}")
+    #logger.info(f"  Num Epochs = {args.num_train_epochs}")
+    #logger.info(f"  Total optimization steps = {args.max_train_steps}")
+    #progress_bar = tqdm(range(args.max_train_steps))
+
     # Time to train
     global_step = 0
-    for _ in tqdm(range(num_epochs), desc="Epochs"):
+    for _ in tqdm(range(args.num_epochs), desc="Epochs"):
         for example in tqdm(train_dataloader, desc="Training"):
             model.train()
             input_ids, att_mask, labels = example["input_ids"].to(device), example["attention_mask"].to(device), example["labels"].to(device)
-            logits = model.forward(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
-            #print(logits.view(-1, out.shape[-1]).shape, labels.view(-1).shape)
-            loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), labels.view(-1))
-            optimizer.zero_grad()
+            if args.custom is False:
+               out = model.forward(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
+               loss = out.loss
+            else:
+               logits = model.forward(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
+               loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), labels.view(-1))
             loss.backward()
             optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
 
             global_step += 1
 
-            if(global_step > max_train_steps) or (global_step > eval_every):
+            if(global_step > argsmax_train_steps) or (global_step % eval_every == 0):
               break
 
         for batch in tqdm(valid_dataloader, desc="Evaluating"):
@@ -165,8 +183,8 @@ def main():
             torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
         else:
             torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
-# YOUR CODE ENDS HERE
-run.finish()  # stop wandb run
+
+    run.finish()  # stop wandb run
 
 if __name__ == "__main__" :
     if version.parse(datasets.__version__) < version.parse("1.18.0"):
