@@ -51,10 +51,13 @@ def main():
   # from re downloading the checkpoint
   logger.info(f"Loading model")
   base_model = AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint_name)
+  pretrained_model = AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint_name,config=AutoConfig.from_pretrained(args.checkpoint_name,output_hidden_states=True)
   logger.info(f"Resizing model embeddings")
   base_model.resize_token_embeddings(len(tokenizer))
+  pretrained_model.resize_token_embeddings(len(tokenizer))
   logger.info(f"Saving model")
-  torch.save(base_model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model.pt") )
+  torch.save(base_model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model.pt"))
+  torch.save(pretrained_model, os.path.join(args.save_dir, f"{args.checkpoint_name}_pretrained_model.pt"))
   ##################################### Dataset setup ###########################################
   logger.info(f"calling set_up_datasets")
   train_set, eval_set = set_up_datasets(tokenizer, seq_len = 128):
