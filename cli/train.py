@@ -103,7 +103,11 @@ def evaluate_model(model, device, dataloader):
       with torch.no_grad():
         model.eval()
         input_ids_v, att_mask_v, labels_v = batch["input_ids"].to(device), batch["attention_mask"].to(device), batch["labels"].to(device)
-        valid_probs = model.forward(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
+	if args.custom is False:
+           valid_probs = model.forward(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
+           valid_probs = valid_probs.logits
+        else:
+           valid_probs = model.forward(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
 
         bleu.add_batch(predictions=torch.argmax(valid_probs, dim=-1), references=labels_v)
     wandb.log({'bleu': bleu_value})
@@ -182,14 +186,17 @@ def main():
 
             global_step += 1
 
-            if(global_step == argsmax_train_steps) or (global_step % eval_every == 0):
+            if(global_step == args.max_train_steps) or (global_step % args.eval_every == 0):
               results = evaluate_model(model, device, valid_dataloader)
-              wandb.log({"eval/bleu": results["bleu"] }
-                  
+              wandb.log({"eval/bleu": results["bleu"] })
+
             if args.custom is False:
                torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
             else:
                torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
+
+            if global_step > args.max_train_steps:
+               break
 
     run.finish()  # stop wandb run
 
