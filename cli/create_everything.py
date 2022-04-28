@@ -7,7 +7,7 @@ from packaging import version
 
 import pandas as pd
 from datasets import load_dataset, concatenate_datasets
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
 
 # Setup logging
 logger = logging.getLogger(__file__)
