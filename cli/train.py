@@ -104,10 +104,9 @@ def evaluate_model(model, device, dataloader, args):
         model.eval()
         input_ids_v, att_mask_v, labels_v = batch["input_ids"].to(device), batch["attention_mask"].to(device), batch["labels"].to(device)
         if args.custom is False:
-           valid_probs = model.forward(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
-           valid_probs = valid_probs.logits
+           valid_probs = model(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1)).logits
         else:
-           valid_probs = model.forward(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
+           valid_probs = model(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
 
         bleu.add_batch(predictions=torch.argmax(valid_probs, dim=-1), references=labels_v)
 
@@ -174,10 +173,10 @@ def main():
             model.train()
             input_ids, att_mask, labels = example["input_ids"].to(device), example["attention_mask"].to(device), example["labels"].to(device)
             if args.custom is False:
-               out = model.forward(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
+               out = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
                loss = out.loss
             else:
-               logits = model.forward(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
+               logits = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
                loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), labels.view(-1))
             loss.backward()
             optimizer.step()
