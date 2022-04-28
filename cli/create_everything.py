@@ -98,7 +98,7 @@ def set_up_datasets(tokenizer, seq_len = 128):
   encoded_datasets = []
   for dataset in split_datasets:
     old_col_names = list(dataset['train'].column_names)
-    encoded_dataset = dataset.map(preprocess_function, fn_kwargs = dict(seq_len = seq_len), remove_columns = old_col_names, num_proc = 4)
+    encoded_dataset = dataset.map(preprocess_function, fn_kwargs = dict(seq_len = seq_len), remove_columns = old_col_names, batched = True, num_proc = 4)
     encoded_datasets.append(encoded_dataset)
   # now list the train splits and the test splits, and concatenate them
   train_splits = []
