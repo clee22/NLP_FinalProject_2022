@@ -136,8 +136,8 @@ def main():
     eval_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"test_dataset"))
     # Dataloader
     collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors = "pt")
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=args.batch_size)
-    valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=args.batch_size)    
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=1)
+    valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=1)    
     # optimizer
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -167,21 +167,25 @@ def main():
     #progress_bar = tqdm(range(args.max_train_steps))
 
     # Time to train
+    accum_iter  = batch_size=args.batch_size
     global_step = 0
     for _ in tqdm(range(args.num_epochs), desc="Epochs"):
-        for example in tqdm(train_dataloader, desc="Training"):
-            model.train()
+        for batch_idx, example in enumerate(train_dataloader)):
             input_ids, att_mask, labels = example["input_ids"].to(device), example["attention_mask"].to(device), example["labels"].to(device)
-            if args.custom is False:
-               out = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
-               loss = out.loss
-            else:
-               logits = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
-               loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), labels.view(-1))
-            loss.backward()
-            optimizer.step()
-            lr_scheduler.step()
-            optimizer.zero_grad()
+            with torch.set_grad_enabled(True):    
+                if args.custom is False:
+                   loss = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1)).loss
+                else:
+                   logits = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
+                   loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), labels.view(-1))
+
+                lost = lost / accum_iter
+                loss.backward()
+                lr_scheduler.step()
+
+                if ((batch_idx + 1) % accum_iter == 0) or (batch_idx + 1 == len(data_loader)):
+                    optimizer.step()
+                    optimizer.zero_grad()
 
             global_step += 1
 
