@@ -98,6 +98,21 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+def evaluate_model(model, device, dataloader):
+    for batch in tqdm(dataloader, desc="Evaluating"):
+      with torch.no_grad():
+        model.eval()
+        input_ids_v, att_mask_v, labels_v = batch["input_ids"].to(device), batch["attention_mask"].to(device), batch["labels"].to(device)
+        valid_probs = model.forward(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
+
+        bleu.add_batch(predictions=torch.argmax(valid_probs, dim=-1), references=labels_v)
+    wandb.log({'bleu': bleu_value})
+    model.train()
+    eval_metric = bleu.compute()
+    evaluation_results = {
+        "bleu": eval_metric["score"],
+    }
+    return evaluation_results
 
 def main():
     args = parse_args()
@@ -167,22 +182,14 @@ def main():
 
             global_step += 1
 
-            if(global_step > argsmax_train_steps) or (global_step % eval_every == 0):
-              break
-
-        for batch in tqdm(valid_dataloader, desc="Evaluating"):
-          with torch.no_grad():
-            model.eval()
-            input_ids_v, att_mask_v, labels_v = batch["input_ids"].to(device), batch["attention_mask"].to(device), batch["labels"].to(device)
-            valid_probs = model.forward(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
-
-            bleu.add_batch(predictions=torch.argmax(valid_probs, dim=-1), references=labels_v)
-        bleu_value = bleu.compute()
-        wandb.log({'bleu': bleu_value})
-        if args.custom is False:
-            torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
-        else:
-            torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
+            if(global_step == argsmax_train_steps) or (global_step % eval_every == 0):
+              results = evaluate_model(model, device, valid_dataloader)
+              wandb.log({"eval/bleu": results["bleu"] }
+                  
+            if args.custom is False:
+               torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
+            else:
+               torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
 
     run.finish()  # stop wandb run
 
