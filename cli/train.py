@@ -49,7 +49,7 @@ def parse_args():
     )
     parser.add_argument(
         "--lr",
-        type=int,
+        type=float,
         default=2e-5,
         help=("how much do you want it to learn"),
     )
@@ -62,7 +62,7 @@ def parse_args():
     parser.add_argument(
         "--weight_decay",
         type=float,
-        default=0.01,
+        default=0.00,
         help=("How fast will your learning rate degrade"),
     )
     parser.add_argument(
@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument(
         "--max_train_steps",
         type=int,
-        default=35000,
+        default=None,
         help=("How how many steps will you train for"),
     )
     parser.add_argument(
@@ -94,6 +94,12 @@ def parse_args():
         type=bool,
         default=False,
         help=("Am I training the custom or default model?"),
+    )
+    parser.add_argument(
+        "--target_batch_size",
+	type=int,
+        default=32,
+	help={"this can't run above bastch size 6 so this applies gradient accumulation"}
     )
     args = parser.parse_args()
     return args
@@ -130,14 +136,14 @@ def main():
     
     model = model.to(device)
     # load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_tokenizer"))
+    tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_tokenizer"), use_fast = True)
   # Datasets loaded from local files
     train_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"train_dataset"))
     eval_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"test_dataset"))
     # Dataloader
-    collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors = "pt")
-    train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=1)
-    valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=1)    
+    collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors = 'pt')
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=args.batch_size, num_workers = 8)
+    valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=args.batch_size, num_workers = 8)
     # optimizer
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -147,7 +153,7 @@ def main():
     # getting the max_train_steps and epoch count settled
     num_update_steps_per_epoch = len(train_dataloader)
     if args.max_train_steps is None:
-        args.num_epochs = args.num_epochs * num_update_steps_per_epoch
+        args.max_train_steps = args.num_epochs * num_update_steps_per_epoch
     else:
         args.num_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
     # scheduler
@@ -159,47 +165,58 @@ def main():
     )
     # Initialize wandb as soon as possible to log all stdout to the cloud
     run = wandb.init(project="Final ProjectSpring2022", config=args)
-    
+
     #logger.info("***** Running training *****")
     #logger.info(f"  Num examples = {len(train_dataset)}")
     #logger.info(f"  Num Epochs = {args.num_train_epochs}")
     #logger.info(f"  Total optimization steps = {args.max_train_steps}")
-    #progress_bar = tqdm(range(args.max_train_steps))
+
 
     # Time to train
-    accum_iter  = batch_size=args.batch_size
+    accum_iter  = args.target_batch_size / args.batch_size
+    wandb.watch(model)
     global_step = 0
-    for _ in tqdm(range(args.num_epochs), desc="Epochs"):
-        for batch_idx, example in enumerate(train_dataloader)):
+    epoch_bar = tqdm(range(args.num_epochs))
+    progress_bar = tqdm(range(args.max_train_steps))
+    for epoch in range(0, args.num_epochs):
+        for batch_idx, example in enumerate(train_dataloader):
             input_ids, att_mask, labels = example["input_ids"].to(device), example["attention_mask"].to(device), example["labels"].to(device)
             with torch.set_grad_enabled(True):    
                 if args.custom is False:
-                   loss = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1)).loss
+                   out = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
+                   loss = out.loss
+                   del out
                 else:
                    logits = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
                    loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), labels.view(-1))
 
-                lost = lost / accum_iter
+                loss = loss / accum_iter
                 loss.backward()
-                lr_scheduler.step()
 
-                if ((batch_idx + 1) % accum_iter == 0) or (batch_idx + 1 == len(data_loader)):
+                if ((batch_idx + 1) % accum_iter == 0) or (batch_idx + 1 == len(train_dataloader)):
                     optimizer.step()
+                    lr_scheduler.step()
                     optimizer.zero_grad()
 
+            progress_bar.update(1)
             global_step += 1
 
             if(global_step == args.max_train_steps) or (global_step % args.eval_every == 0):
               results = evaluate_model(model, device, valid_dataloader, args)
-              wandb.log({"eval/bleu": results["bleu"] })
+              wandb.log({"eval/bleu": results["bleu"]},step=global_step)
 
-            if args.custom is False:
-               torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
-            else:
-               torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
+            wandb.log({"train_loss": loss,
+                       "learning_rate": optimizer.param_groups[0]["lr"],
+                       "epoch": epoch}, step=global_step)
 
-            if global_step > args.max_train_steps:
-               break
+        if args.custom is False:
+            torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
+        else:
+            torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
+
+        if global_step > args.max_train_steps:
+            break
+        epoch_bar.update(1)
 
     run.finish()  # stop wandb run
 
