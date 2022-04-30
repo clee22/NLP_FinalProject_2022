@@ -68,7 +68,7 @@ def parse_args():
     parser.add_argument(
         "--seq_len",
         type=int,
-        default=None,
+        default=128,
         help=("How long are your sequences"),
     )
     parser.add_argument(
@@ -127,24 +127,27 @@ def main():
     args = parse_args()
     # define device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    # logger.info(f"Starting script with arguments: {args}")
+
     if args.custom is False:
         model = AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model"))
-    else:
-        pre_trained =  AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_pretrained_model"))
-        model = custom_mt5(mt5_model = pretrained_model)
+    elif args.custom is True:
+        pre_trained = AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_pretrained_model"))
+        model = custom_mt5(mt5_model = pre_trained, seq_len = args.seq_len)
     
     model = model.to(device)
     # load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_tokenizer"), use_fast = True)
-  # Datasets loaded from local files
+   # Datasets loaded from local files
     train_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"train_dataset"))
     eval_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"test_dataset"))
     # Dataloader
     collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors = 'pt')
     train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=args.batch_size, num_workers = 8)
     valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=args.batch_size, num_workers = 8)
+    # accumative iterator for modulus
+    accum_iter  = args.target_batch_size / args.batch_size
     # optimizer
+    args.weight_decay = args.weight_decay*accum_iter
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
@@ -152,11 +155,13 @@ def main():
     )
     # getting the max_train_steps and epoch count settled
     num_update_steps_per_epoch = len(train_dataloader)
+
     if args.max_train_steps is None:
         args.max_train_steps = args.num_epochs * num_update_steps_per_epoch
     else:
         args.num_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
     # scheduler
+    args.warmup_steps = args.warmup_steps / accum_iter
     lr_scheduler = transformers.get_scheduler(
         name="linear",
         optimizer=optimizer,
@@ -173,7 +178,6 @@ def main():
 
 
     # Time to train
-    accum_iter  = args.target_batch_size / args.batch_size
     wandb.watch(model)
     global_step = 0
     epoch_bar = tqdm(range(args.num_epochs))
