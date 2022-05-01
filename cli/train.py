@@ -15,7 +15,7 @@ import transformers
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, AutoConfig
 from transformers.data.data_collator import DataCollatorWithPadding
 from custom_mt import custom_mt5 
-
+import utils
 """
 # Setup logging
 logger = logging.getLogger(__file__)
@@ -104,39 +104,55 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-def evaluate_model(model, device, dataloader, args):
-    for batch in tqdm(dataloader, desc="Evaluating"):
-      with torch.no_grad():
-        model.eval()
-        input_ids_v, att_mask_v, labels_v = batch["input_ids"].to(device), batch["attention_mask"].to(device), batch["labels"].to(device)
-        if args.custom is False:
-           valid_probs = model(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1)).logits
-        else:
-           valid_probs = model(input_ids=torch.squeeze(input_ids_v,1), attention_mask=att_mask_v, labels=torch.squeeze(labels_v,1))
+def evaluate_model(model, device, tokenizer, dataloader, args):
+    n_generated_tokens = 0
+    model.eval()
+    for batch in tqdm(dataloader, desc="Evaluation"):
+       with torch.inference_mode():
+          input_ids = batch["input_ids"].to(device)
+          att_mask = batch["attention_mask"].to(device)
+          labels = batch["labels"].to(device)
 
-        bleu.add_batch(predictions=torch.argmax(valid_probs, dim=-1), references=labels_v)
+          generated_tokens = model.generate(input_ids=input_ids,
+                                            bos_token_id=tokenizer.bos_token_id,
+                                            eos_token_id=tokenizer.eos_token_id,
+                                            pad_token_id=tokenizer.pad_token_id,
+                                            attention_mask=att_mask,
+                                            do_sample=False,
+                                            num_beams=5,
+                                            )
+          decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+          decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+          for pred in decoded_preds:
+             n_generated_tokens += len(tokenizer(pred)["input_ids"])
+
+          decoded_preds, decoded_labels = utils.postprocess_text(decoded_preds, decoded_labels)
+          bleu.add_batch(predictions=decoded_preds, references=decoded_labels)
 
     model.train()
     eval_metric = bleu.compute()
     evaluation_results = {
         "bleu": eval_metric["score"],
+        "generation_length": n_generated_tokens / len(dataloader.dataset),
     }
-    return evaluation_results
+    return evaluation_results, decoded_preds, decoded_labels
 
 def main():
     args = parse_args()
     # define device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    if args.custom is False:
-        model = AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model"))
-    elif args.custom is True:
-        pre_trained = AutoModelForSeq2SeqLM.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_pretrained_model"))
-        model = custom_mt5(mt5_model = pre_trained, seq_len = args.seq_len)
+    model = AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint_name)
+    if args.custom is True:
+        model = custom_mt5(model = pre_trained, seq_len = args.seq_len)
     
     model = model.to(device)
     # load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_tokenizer"), use_fast = True)
+    if args.custom is False:
+       tokenizer = AutoTokenizer.from_pretrained(args.checkpoint_name, use_fast=True)
+    else:
+       tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_tokenizer"), use_fast = True)
    # Datasets loaded from local files
     train_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"train_dataset"))
     eval_dataset = datasets.load_from_disk(os.path.join(args.save_dir, f"test_dataset"))
@@ -144,10 +160,11 @@ def main():
     collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors = 'pt')
     train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=args.batch_size, num_workers = 8)
     valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=args.batch_size, num_workers = 8)
+    print()
     # accumative iterator for modulus
     accum_iter  = args.target_batch_size / args.batch_size
     # optimizer
-    args.weight_decay = args.weight_decay*accum_iter
+    args.weight_decay = args.weight_decay * accum_iter
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
@@ -166,7 +183,7 @@ def main():
         name="linear",
         optimizer=optimizer,
         num_warmup_steps=args.warmup_steps,
-        num_training_steps=args.max_train_steps,
+        num_training_steps=args.max_train_steps / accum_iter,
     )
     # Initialize wandb as soon as possible to log all stdout to the cloud
     run = wandb.init(project="Final ProjectSpring2022", config=args)
@@ -184,14 +201,14 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps))
     for epoch in range(0, args.num_epochs):
         for batch_idx, example in enumerate(train_dataloader):
+#            print(f"input ids shape: {example['input_ids'].shape}")
+#            print(f"labels shape: {example['labels'].shape}")
             input_ids, att_mask, labels = example["input_ids"].to(device), example["attention_mask"].to(device), example["labels"].to(device)
             with torch.set_grad_enabled(True):    
                 if args.custom is False:
-                   out = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
-                   loss = out.loss
-                   del out
+                   loss = model(input_ids=input_ids, attention_mask=att_mask, labels=labels).loss
                 else:
-                   logits = model(input_ids=torch.squeeze(input_ids,1), attention_mask=att_mask, labels=torch.squeeze(labels,1))
+                   logits = model(input_ids=input_ids, attention_mask=att_mask, labels=labels)
                    loss = F.cross_entropy(logits.view(-1, logits.shape[-1]), labels.view(-1))
 
                 loss = loss / accum_iter
@@ -206,7 +223,7 @@ def main():
             global_step += 1
 
             if(global_step == args.max_train_steps) or (global_step % args.eval_every == 0):
-              results = evaluate_model(model, device, valid_dataloader, args)
+              results = evaluate_model(model, device, tokenizer, valid_dataloader, args)
               wandb.log({"eval/bleu": results["bleu"]},step=global_step)
 
             wandb.log({"train_loss": loss,
