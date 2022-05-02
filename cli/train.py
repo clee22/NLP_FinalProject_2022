@@ -146,7 +146,7 @@ def main():
 
     model = AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint_name)
     if args.custom is True:
-        model = custom_mt5(model = pre_trained, seq_len = args.seq_len)
+        model = custom_mt5(mt5_model = model, seq_len = args.seq_len)
     
     model = model.to(device)
     # load tokenizer
