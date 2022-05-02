@@ -25,9 +25,9 @@ logging.basicConfig(
     level=logging.INFO,
 )
 """
-
-#datasets.utils.logging.set_verbosity_warning()
-#transformers.utils.logging.set_verbosity_warning()
+os.environ["TOKENIZERS_PARALLELISM"]= "false"
+datasets.utils.logging.set_verbosity_warning()
+transformers.utils.logging.set_verbosity_warning()
 # metric
 bleu = load_metric("sacrebleu")
 
@@ -112,7 +112,7 @@ def evaluate_model(model, device, tokenizer, dataloader, args):
           input_ids = batch["input_ids"].to(device)
           att_mask = batch["attention_mask"].to(device)
           labels = batch["labels"].to(device)
-
+#          print(input_ids.shape, labels.shape)
           generated_tokens = model.generate(input_ids=input_ids,
                                             bos_token_id=tokenizer.bos_token_id,
                                             eos_token_id=tokenizer.eos_token_id,
@@ -123,11 +123,12 @@ def evaluate_model(model, device, tokenizer, dataloader, args):
                                             )
           decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
           decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
+#          print(decoded_preds[0])
           for pred in decoded_preds:
              n_generated_tokens += len(tokenizer(pred)["input_ids"])
-
+#          print(decoded_labels[0])
           decoded_preds, decoded_labels = utils.postprocess_text(decoded_preds, decoded_labels)
+#          print(decoded_labels[0])
           bleu.add_batch(predictions=decoded_preds, references=decoded_labels)
 
     model.train()
@@ -136,7 +137,7 @@ def evaluate_model(model, device, tokenizer, dataloader, args):
         "bleu": eval_metric["score"],
         "generation_length": n_generated_tokens / len(dataloader.dataset),
     }
-    return evaluation_results, decoded_preds, decoded_labels
+    return evaluation_results
 
 def main():
     args = parse_args()
@@ -150,7 +151,7 @@ def main():
     model = model.to(device)
     # load tokenizer
     if args.custom is False:
-       tokenizer = AutoTokenizer.from_pretrained(args.checkpoint_name, use_fast=True)
+       tokenizer = AutoTokenizer.from_pretrained(args.checkpoint_name)
     else:
        tokenizer = AutoTokenizer.from_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_tokenizer"), use_fast = True)
    # Datasets loaded from local files
@@ -224,7 +225,9 @@ def main():
 
             if(global_step == args.max_train_steps) or (global_step % args.eval_every == 0):
               results = evaluate_model(model, device, tokenizer, valid_dataloader, args)
-              wandb.log({"eval/bleu": results["bleu"]},step=global_step)
+              wandb.log({"eval/bleu": results["bleu"],
+                         "eval/generation_length": results["generation_length"],}
+                         ,step=global_step)
 
             wandb.log({"train_loss": loss,
                        "learning_rate": optimizer.param_groups[0]["lr"],

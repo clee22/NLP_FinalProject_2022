@@ -7,4 +7,9 @@ def postprocess_text(preds, labels):
     preds = [pred.strip() for pred in preds]
     labels = [[label.strip()] for label in labels]
 
+    for i in range(0,len(preds)):
+        if labels[i] is None or labels[i] is "":
+           preds.pop(i)
+           labels.pop(i)
+
     return preds, labels
