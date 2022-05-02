@@ -161,7 +161,6 @@ def main():
     collator = DataCollatorWithPadding(tokenizer=tokenizer, return_tensors = 'pt')
     train_dataloader = torch.utils.data.DataLoader(train_dataset, shuffle=True, collate_fn=collator, batch_size=args.batch_size, num_workers = 8)
     valid_dataloader = torch.utils.data.DataLoader(eval_dataset, shuffle=False, collate_fn=collator, batch_size=args.batch_size, num_workers = 8)
-    print()
     # accumative iterator for modulus
     accum_iter  = args.target_batch_size / args.batch_size
     # optimizer
