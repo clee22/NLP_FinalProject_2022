@@ -16,7 +16,7 @@ class custom_mt5(nn.Module):
       self.dropout = nn.Dropout(dropout) 
 
     def forward(self, input_ids, attention_mask, labels):
-      encod = self.model_layer(input_ids=torch.squeeze(input_ids,1), attention_mask=attention_mask, labels=torch.squeeze(labels,1))
+      encod = self.model_layer(input_ids=input_ids, attention_mask=att_mask, labels=labels)
       encod = self.layer_norm(encod.decoder_hidden_states[-1])
       encod = self.addi_layers(encod)
       out = self.output_layer(encod)
