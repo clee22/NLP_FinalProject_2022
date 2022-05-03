@@ -122,8 +122,7 @@ def evaluate_model(model, device, tokenizer, dataloader, args):
                                             num_beams=5,
                                             )
           else:
-             logits = model(input_ids=input_ids,attention_mask=att_mask,labels=labels)
-             generated_tokens = torch.argmax(logits, dim=-1)
+             generated_tokens =  model.generate(input_ids=input_ids,attention_mask=att_mask, tokenizer)
 
           decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
           decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
@@ -224,9 +223,9 @@ def main():
 
             if(global_step >= args.max_train_steps) or (global_step % args.eval_every == 0):
               if args.custom is False:
-                 torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
+                 model.save_pretrained(os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained"))
               else:
-                 torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
+                 torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained"))
 
               results, decoded_preds, decoded_labels = evaluate_model(model, device, tokenizer, valid_dataloader, args)
               print(decoded_preds, decoded_labels)
