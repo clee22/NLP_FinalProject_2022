@@ -112,8 +112,8 @@ def evaluate_model(model, device, tokenizer, dataloader, args):
           input_ids = batch["input_ids"].to(device)
           att_mask = batch["attention_mask"].to(device)
           labels = batch["labels"].to(device)
-#          print(input_ids.shape, labels.shape)
-          generated_tokens = model.generate(input_ids=input_ids,
+          if args.custom == False:
+             generated_tokens = model.generate(input_ids=input_ids,
                                             bos_token_id=tokenizer.bos_token_id,
                                             eos_token_id=tokenizer.eos_token_id,
                                             pad_token_id=tokenizer.pad_token_id,
@@ -121,14 +121,16 @@ def evaluate_model(model, device, tokenizer, dataloader, args):
                                             do_sample=False,
                                             num_beams=5,
                                             )
+          else:
+             logits = model(input_ids=input_ids,attention_mask=att_mask,labels=labels)
+             generated_tokens = torch.argmax(logits, dim=-1)
+
           decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
           decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-#          print(decoded_preds[0])
           for pred in decoded_preds:
              n_generated_tokens += len(tokenizer(pred)["input_ids"])
-#          print(decoded_labels[0])
+
           decoded_preds, decoded_labels = utils.postprocess_text(decoded_preds, decoded_labels)
-#          print(decoded_labels[0])
           bleu.add_batch(predictions=decoded_preds, references=decoded_labels)
 
     model.train()
@@ -137,14 +139,14 @@ def evaluate_model(model, device, tokenizer, dataloader, args):
         "bleu": eval_metric["score"],
         "generation_length": n_generated_tokens / len(dataloader.dataset),
     }
-    return evaluation_results
+    return evaluation_results, decoded_preds, decoded_labels
 
 def main():
     args = parse_args()
     # define device
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    model = AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint_name)
+    model = AutoModelForSeq2SeqLM.from_pretrained(args.checkpoint_name, config=AutoConfig.from_pretrained(args.checkpoint_name,output_hidden_states=True))
     if args.custom is True:
         model = custom_mt5(mt5_model = model, seq_len = args.seq_len)
     
@@ -201,8 +203,6 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps))
     for epoch in range(0, args.num_epochs):
         for batch_idx, example in enumerate(train_dataloader):
-#            print(f"input ids shape: {example['input_ids'].shape}")
-#            print(f"labels shape: {example['labels'].shape}")
             input_ids, att_mask, labels = example["input_ids"].to(device), example["attention_mask"].to(device), example["labels"].to(device)
             with torch.set_grad_enabled(True):    
                 if args.custom is False:
@@ -222,8 +222,14 @@ def main():
             progress_bar.update(1)
             global_step += 1
 
-            if(global_step == args.max_train_steps) or (global_step % args.eval_every == 0):
-              results = evaluate_model(model, device, tokenizer, valid_dataloader, args)
+            if(global_step >= args.max_train_steps) or (global_step % args.eval_every == 0):
+              if args.custom is False:
+                 torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
+              else:
+                 torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
+
+              results, decoded_preds, decoded_labels = evaluate_model(model, device, tokenizer, valid_dataloader, args)
+              print(decoded_preds, decoded_labels)
               wandb.log({"eval/bleu": results["bleu"],
                          "eval/generation_length": results["generation_length"],}
                          ,step=global_step)
@@ -232,13 +238,9 @@ def main():
                        "learning_rate": optimizer.param_groups[0]["lr"],
                        "epoch": epoch}, step=global_step)
 
-        if args.custom is False:
-            torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_base_model_trained.pt"))
-        else:
-            torch.save(model, os.path.join(args.save_dir, f"{args.checkpoint_name}_custom_model_trained.pt"))
 
-        if global_step > args.max_train_steps:
-            break
+            if global_step > args.max_train_steps:
+               break
         epoch_bar.update(1)
 
     run.finish()  # stop wandb run

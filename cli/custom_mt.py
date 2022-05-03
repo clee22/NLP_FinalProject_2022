@@ -17,8 +17,7 @@ class custom_mt5(nn.Module):
 
     def forward(self, input_ids, attention_mask, labels):
       encod = self.model_layer(input_ids=torch.squeeze(input_ids,1), attention_mask=attention_mask, labels=torch.squeeze(labels,1))
-      encod = self.layer_norm(encod.encoder_last_hidden_state)
+      encod = self.layer_norm(encod.decoder_hidden_states[-1])
       encod = self.addi_layers(encod)
       out = self.output_layer(encod)
-      out = F.sigmoid(out)
       return out
