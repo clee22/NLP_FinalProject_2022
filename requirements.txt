@@ -8,4 +8,4 @@ numpy
 sentencepiece 
 tqdm 
 pandas 
-sacrebleu == sacrebleu
+sacrebleu == 1.4.14
