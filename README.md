@@ -22,7 +22,7 @@ these were the args I used and next to them are the purpose of each: <br>
 
 In the end, I could not get the base model to work correctly for me, but regardless this is the function I used while attempting to get mT5 in working order.
 
-regardless here is the functions I used
+regardless here is the functions I used: <br> 
 
 python cli/create_everything.py --save_dir=output_dir
 
